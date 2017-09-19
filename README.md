@@ -1,2 +1,2 @@
 # PlayWithWhiteDB
-using WhiteDB
+using WhiteDB: http://whitedb.org/index.html
