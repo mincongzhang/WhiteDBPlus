@@ -62,7 +62,8 @@ int main(int argc, char **argv) {
 
   std::string key = "9273";
   /* Create a database with custom key and 2M size */
-  shmptr=wg_attach_database(key.c_str(), 2000000);
+  //NOTE: the api takes "char *" only, string::c_str() will be const char *, so we pass &str[0]
+  shmptr=wg_attach_database(&key[0], 2000000);
   std::cout<<"Creating database with key ["<<key<<"]"<<std::endl;
 
   /* Using default key and size:
@@ -80,7 +81,8 @@ int main(int argc, char **argv) {
   /* Clean up. The shared memory area is released. This is
    * useful for the purposes of this demo, but might best be
    * avoided for more persistent databases. */
-  wg_delete_database(key.c_str());
+  wg_detach_database(shmptr);
+  wg_delete_database(&key[0]);
   /* Database with default key:
   wg_delete_database(NULL);
   */
@@ -375,9 +377,23 @@ void run_demo(void* db) {
     rec = wg_find_record_double(db, 0, WG_COND_EQUAL, val, rec);
   }
 
+  printf("\n");
+
+  printf("Query: search for field 2 == This is a char array:\n");
+  //NOTE: the api takes "char *" only, string.c_str will be const char *, so we pass &str_val[0]
+  std::string str_val = "This is a char array";
+  rec = wg_find_record_str(db, 2, WG_COND_EQUAL, &str_val[0], NULL);
+  while(rec) {
+    printf("Found a record where field 2 is This is a char array\n");
+    wg_print_record(db, (wg_int *) rec);
+    printf("\n");
+    rec = wg_find_record_str(db, 2, WG_COND_EQUAL, &str_val[0], rec);
+  }
+
   printf("************************************\n");
   printf("\n");
 
+  //TODO: update existing?
 
   printf("********* Demo ended ************\n");
 }

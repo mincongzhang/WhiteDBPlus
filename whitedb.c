@@ -2232,7 +2232,7 @@ static gint show_memory_error_nr(char* errmsg, int nr);
  */
 
 
-void* wg_attach_database(const char* dbasename, gint size){
+void* wg_attach_database(char* dbasename, gint size){
   void* shm = wg_attach_memsegment(dbasename, size, size, 1, 0, 0);
   CHECK_SEGMENT(shm)
   return shm;
@@ -2244,7 +2244,7 @@ void* wg_attach_database(const char* dbasename, gint size){
  *
  */
 
-void* wg_attach_existing_database(const char* dbasename){
+void* wg_attach_existing_database(char* dbasename){
   void* shm = wg_attach_memsegment(dbasename, 0, 0, 0, 0, 0);
   CHECK_SEGMENT(shm)
   return shm;
@@ -2255,7 +2255,7 @@ void* wg_attach_existing_database(const char* dbasename){
  * Starts journal logging in the database.
  */
 
-void* wg_attach_logged_database(const char* dbasename, gint size){
+void* wg_attach_logged_database(char* dbasename, gint size){
   void* shm = wg_attach_memsegment(dbasename, size, size, 1, 1, 0);
   CHECK_SEGMENT(shm)
   return shm;
@@ -2267,7 +2267,7 @@ void* wg_attach_logged_database(const char* dbasename, gint size){
  * Otherwise performs like wg_attach_database().
  */
 
-void* wg_attach_database_mode(const char* dbasename, gint size, int mode){
+void* wg_attach_database_mode(char* dbasename, gint size, int mode){
   void* shm = wg_attach_memsegment(dbasename, size, size, 1, 0, mode);
   CHECK_SEGMENT(shm)
   return shm;
@@ -2279,7 +2279,7 @@ void* wg_attach_database_mode(const char* dbasename, gint size, int mode){
  * Otherwise performs like wg_attach_logged_database().
  */
 
-void* wg_attach_logged_database_mode(const char* dbasename, gint size, int mode){
+void* wg_attach_logged_database_mode(char* dbasename, gint size, int mode){
   void* shm = wg_attach_memsegment(dbasename, size, size, 1, 1, mode);
   CHECK_SEGMENT(shm)
   return shm;
@@ -2308,7 +2308,7 @@ static int normalize_perms(int mode) {
  *  file).
  */
 
-void* wg_attach_memsegment(const char* dbasename, gint minsize,
+void* wg_attach_memsegment(char* dbasename, gint minsize,
                                gint size, int create, int logging, int mode){
 #ifdef USE_DATABASE_HANDLE
   void *dbhandle;
@@ -2471,7 +2471,7 @@ int wg_detach_database(void* dbase) {
  *
  * returns 0 if OK
  */
-int wg_delete_database(const char* dbasename) {
+int wg_delete_database(char* dbasename) {
   int key=0;
 
   // default args handling
@@ -3461,26 +3461,26 @@ static gint init_hash_subarea(void* db, db_hash_area_header* areah, gint arrayle
   return 0;
 }
 
-static gint init_db_recptr_bitmap(void* db) {
+static gint init_db_recptr_bitmap(void* db) {    
   db_memsegment_header* dbh = dbmemsegh(db);
 
 #ifdef USE_RECPTR_BITMAP
   gint segmentchunk;
   gint asize;
-
+  
   // recs minimal alignment 8 bytes, multiply by 8 bits in byte = 64
-  asize=((dbh->size)/64)+16;
+  asize=((dbh->size)/64)+16; 
   segmentchunk=alloc_db_segmentchunk(db,asize);
   if (!segmentchunk) return -2; // errcase
   dbh->recptr_bitmap.offset=segmentchunk;
   dbh->recptr_bitmap.size=asize;
   memset(offsettoptr(db,segmentchunk),0,asize);
   return 0;
-#else
+#else  
   dbh->recptr_bitmap.offset=0;
-  dbh->recptr_bitmap.size=0;
+  dbh->recptr_bitmap.size=0;  
   return 0;
-#endif
+#endif     
 }
 
 
@@ -7560,7 +7560,7 @@ void *wg_get_rec_owner(void *db, void *rec) {
 /** Check both that db and record pointer ptr are correct.
 
  Uses the record pointer bitmap.
-
+  
 */
 
 #ifdef USE_RECPTR_BITMAP /* currently disabled, as nothing is updating
@@ -7572,7 +7572,7 @@ gint wg_recptr_check(void *db,void *ptr) {
   unsigned char byte;
   db_memsegment_header* dbh = dbmemsegh(db);
   gint offset=ptrtooffset(db,ptr);
-
+  
   if (!dbcheckh(dbh)) return -1; // not a correct db
   if (offset<=0 || offset>=dbh->size) return -2; // ptr out of area
   if (offset%8) return -3; // ptr not correctly aligned
@@ -7591,7 +7591,7 @@ static void recptr_setbit(void *db,void *ptr) {
   unsigned char byte;
   db_memsegment_header* dbh = dbmemsegh(db);
   gint offset=ptrtooffset(db,ptr);
-
+  
   //if (offset<=0 || offset>=dbh->size) return -1; // out of area
   //if (offset%8) return -2; // not correctly aligned
   addr=offset/64; // divide by alignment
@@ -7608,7 +7608,7 @@ static void recptr_clearbit(void *db,void *ptr) {
   unsigned char byte;
   db_memsegment_header* dbh = dbmemsegh(db);
   gint offset=ptrtooffset(db,ptr);
-
+  
   //if (offset<=0 || offset>=dbh->size) return -1; // out of area
   //if (offset%8) return -2; // not correctly aligned
   addr=offset/64; // divide by alignment
