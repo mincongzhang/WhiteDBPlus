@@ -33,37 +33,34 @@ private:
     return false;
   }
 
-  bool setString(void *rec, int field, std::string key) {
+  bool setString(void *rec, int field, std::string & key, bool new_field=false) {
     wg_int enc = wg_encode_str(m_db_ptr, &key[0], NULL);
     if(enc==WG_ILLEGAL) {
-      log("failed to encode an integer.");
+      log("failed to encode ["<<key<<"]");
       return false;
     }
 
-    if(wg_set_field(m_db_ptr, rec, field, enc) < 0) {
-      log("failed to store a field.");
+    bool set_failed = true;
+    //set
+    if(new_field){
+      //NOTE:
+      //Writing will be somewhat faster than with wg_set_field().
+      //The caller should ensure that the field to be written really is one that contains no earlier data.
+      set_failed = wg_set_new_field(m_db_ptr, rec, field, enc) < 0;
+    } else {
+      set_failed = wg_set_field(m_db_ptr, rec, field, enc) < 0;
+    }
+
+    if(set_failed){
+      log("failed to store ["<<key<<"] at field ["<<field<<"]");
       return false;
     }
 
     return true;
   }
 
-  //NOTE:
-  //Writing will be somewhat faster than with wg_set_field().
-  //It is the responsibility of the caller to ensure that the field to be written really is one that contains no earlier data.
-  bool setNewString(void *rec, int field, std::string key) {
-    wg_int enc = wg_encode_str(m_db_ptr, &key[0], NULL);
-    if(enc==WG_ILLEGAL) {
-      log("failed to encode an integer.");
-      return false;
-    }
-
-    if(wg_set_new_field(m_db_ptr, rec, field, enc) < 0) {
-      log("failed to store a field.");
-      return false;
-    }
-
-    return true;
+  bool setNewString(void *rec, int field, std::string & key){
+    return setString(rec,field,key,true);
   }
 
 public:
