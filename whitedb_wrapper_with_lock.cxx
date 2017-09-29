@@ -318,31 +318,6 @@ int main(int argc, char **argv) {
   log("");
 
   ///////////////////////////////////////////
-  log("LOAD SYMBOLOGY:");
-  std::string symbology_file_name = "/home/quotes/web/ticker_plants/dev/dbag/dbag_scoach_symbology-current.dat";
-  std::ifstream infile;
-  std::string line;
-  infile.open(symbology_file_name.c_str());
-
-  int count = 0;
-  while (std::getline(infile, line)){
-    std::vector<std::string> strs;
-    boost::split(strs, line, boost::is_any_of(" "));
-    if(strs.size()!=2){
-      log("Unknown line ["<<line<<"]");
-      continue;
-    }
-    map.create(strs[0],strs[1]);
-    count++;
-    if(count%100000==0){
-      log("loaded ["<<count<<"]");
-    }
-  }
-  infile.close();
-  log("");
-
-
-  ///////////////////////////////////////////
   log("CHECK SIZE:");
   log("db size: "<<map.size());
   log("db free size: "<<map.freeSize());
