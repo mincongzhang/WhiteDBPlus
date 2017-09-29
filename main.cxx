@@ -1,403 +1,268 @@
-/*
-* $Id:  $
-* $Version: $
-*
-* Copyright (c) Priit Järv 2010
-*
-* Minor mods by Tanel Tammet
-*
-* This file is part of WhiteDB
-*
-* WhiteDB is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the License, or
-* (at your option) any later version.
-*
-* WhiteDB is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with WhiteDB.  If not, see <http://www.gnu.org/licenses/>.
-*
-*/
-
- /** @file demo.c
- *  Demonstration of WhiteDB low-level API usage
- */
-
-/* ====== Includes =============== */
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <iostream>
+#include <sstream>
+
+#include <vector>
+#include <fstream>
+#include <boost/algorithm/string.hpp>
+
 
 /* Include dbapi.h for WhiteDB API functions */
 #include "dbapi.h"
 
+#define log(msg) do{std::cout<<msg<<std::endl;}while(0)
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* ====== Private defs =========== */
+const int KEY_FIELD = 0;
+const int VAL_FIELD = 1;
 
 
-/* ======= Private protos ================ */
+//TODO: process/thread safe
+//TODO: write our own wg_print_record so that to save result in a string
+//TODO: write two field together
+class WhiteDbKeyValueMap {
+private:
+  std::string m_db_name;
+  void* m_db_ptr;
 
-void run_demo(void *db);
+  bool checkValid() const {
+    if(m_db_ptr){ return true; }
 
+    log("ERROR: Failed to attach to database ["<<m_db_name<<"]");
+    return false;
+  }
 
-/* ====== Functions ============== */
+  bool setString(void *rec, int field, std::string & key, bool new_field=false) {
+    wg_int enc = wg_encode_str(m_db_ptr, &key[0], NULL);
+    if(enc==WG_ILLEGAL) {
+      log("failed to encode ["<<key<<"]");
+      return false;
+    }
 
-/** Init database, run demo, drop database
- * Command line arguments are ignored.
- */
+    bool set_failed = true;
+    //set
+    if(new_field){
+      //NOTE:
+      //Writing will be somewhat faster than with wg_set_field().
+      //The caller should ensure that the field to be written really is one that contains no earlier data.
+      set_failed = wg_set_new_field(m_db_ptr, rec, field, enc) < 0;
+    } else {
+      set_failed = wg_set_field(m_db_ptr, rec, field, enc) < 0;
+    }
+
+    if(set_failed){
+      log("failed to store ["<<key<<"] at field ["<<field<<"]");
+      return false;
+    }
+
+    return true;
+  }
+
+  bool setNewString(void *rec, int field, std::string & key){
+    return setString(rec,field,key,true);
+  }
+
+public:
+  WhiteDbKeyValueMap(const std::string & db_name, const int db_size):m_db_name(db_name){
+    //If the size parameter is > 0, the named shared memory segment exists and
+    //it is smaller than the given size, the call returns NULL.
+    //use wg_attach_existing_database() for existing db
+    m_db_ptr = wg_attach_existing_database(&m_db_name[0]);
+    if(m_db_ptr!=NULL){
+      log("Attaching to existing database ["<<m_db_name<<"], size ["<<size()<<"], free size ["<<freeSize()<<"]");
+    } else {
+      m_db_ptr = wg_attach_database(&m_db_name[0], db_size);
+      log("Creating new database ["<<m_db_name<<"], size ["<<size()<<"], free size ["<<freeSize()<<"]");
+    }
+
+    checkValid();
+  }
+
+  ~WhiteDbKeyValueMap(){
+    wg_detach_database(m_db_ptr);
+  }
+
+  bool get(std::string key, std::string & val) const {
+    if(!checkValid()) return false;
+
+    void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
+    if(existing_rec) {
+      wg_int enc = wg_get_field(m_db_ptr, existing_rec, VAL_FIELD);
+      char *str = wg_decode_str(m_db_ptr, enc);
+      if(!str){
+        log("ERROR: Got field but failed to decode");
+        wg_print_record(m_db_ptr, (wg_int *) existing_rec);
+        log("");
+        return false;
+      }
+
+      val = str;
+      return true;
+    }
+
+    log("ERROR: record with key ["<<key<<"] doesn't exist");
+    return false;
+  }
+
+  bool create(std::string key, std::string val){
+    if(!checkValid()) return false;
+
+    //Check if already exists
+    //This would be super slow for large scale of data
+    //So you have to be sure the record is not in DB, otherwise there will be duplications
+    /*
+    void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
+    if(existing_rec) {
+      log("Key ["<<key<<"] already in DB:");
+      wg_print_record(m_db_ptr, (wg_int *) existing_rec);
+      log("");
+      return false;
+    }
+    */
+
+    void *rec = wg_create_record(m_db_ptr, 2);
+    if (rec==NULL) {
+      log("rec creation error.");
+      return false;
+    }
+    //TODO: write 2 fields in one time?
+    return setNewString(rec,KEY_FIELD,key) && setNewString(rec,VAL_FIELD,val);
+  }
+
+  bool update(std::string key, std::string val){
+    if(!checkValid()) return false;
+
+    //Try update first
+    void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
+    if(existing_rec) {
+      setString(existing_rec,VAL_FIELD,val);
+      return true;
+    }
+
+    //Create new record
+    void *rec = wg_create_record(m_db_ptr, 2);
+    if (rec==NULL) {
+      log("rec creation error.");
+      return false;
+    }
+    //TODO: write 2 fields in one time?
+    return setNewString(rec,KEY_FIELD,key) && setNewString(rec,VAL_FIELD,val);
+  }
+
+  bool remove(std::string key){
+    if(!checkValid()) return false;
+
+    void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
+    if(existing_rec) {
+      return (wg_delete_record(m_db_ptr, existing_rec) == 0);
+    }
+
+    return false;
+  }
+
+  void dump() const {
+    log("Dumping ["<<m_db_name<<"]:");
+    //wg_print_db(m_db_ptr);
+  }
+
+  int size() const {
+    return wg_database_size(m_db_ptr);
+  }
+
+  int freeSize() const {
+    return wg_database_freesize(m_db_ptr);
+  }
+
+  bool deleteDB(){
+    if(wg_delete_database(&m_db_name[0])==0){
+      return true;
+    }
+
+    return false;
+  }
+};
+
+template<typename T>
+std::string toString ( T num ){
+  std::stringstream ss; ss << num; return ss.str();
+}
 
 int main(int argc, char **argv) {
+  WhiteDbKeyValueMap map("mizhang_whitedb",800000000);
 
-  void* shmptr;
-
-  std::string key = "9273";
-  /* Create a database with custom key and 2M size */
-  //NOTE: the api takes "char *" only, string::c_str() will be const char *, so we pass &str[0]
-  shmptr=wg_attach_database(&key[0], 2000000);
-  std::cout<<"Creating database with key ["<<key<<"]"<<std::endl;
-
-  /* Using default key and size:
-  shmptr=wg_attach_database(NULL, 0);
-  */
-
-  if(!shmptr) {
-    fprintf(stderr, "Failed to attach to database.\n");
-    exit(1);
+  ///////////////////////////////////////////
+  std::string key("isin"), val("123456678");
+  log("CREATE:");
+  if(map.update(key,val)){
+    log("created ["<<key<<"]->["<<val<<"]");
   }
+  log("");
 
-  /* We have successfully attached, run the demo code */
-  run_demo(shmptr);
-
-  /* Clean up. The shared memory area is released. This is
-   * useful for the purposes of this demo, but might best be
-   * avoided for more persistent databases. */
-  wg_detach_database(shmptr);
-  wg_delete_database(&key[0]);
-  /* Database with default key:
-  wg_delete_database(NULL);
-  */
-  exit(0);
-}
-
-/** Run demo code.
- *  Uses various database API functions.
- */
-
-void run_demo(void* db) {
-  void *rec = NULL, *firstrec = NULL, *nextrec = NULL;
-                                /* Pointers to a database record */
-  wg_int enc; /* Encoded data */
-  wg_int lock_id; /* Id of an acquired lock (for releasing it later) */
-  wg_int len;
-  int i;
-  int intdata, datedata, timedata;
-  char strbuf[80];
-
-  printf("********* Starting demo ************\n");
-
-  /* Begin by creating a simple record of 3 fields and fill it
-   * with integer data.
-   */
-
-  ////////////////////////////////////////////////////////////////
-  // Create and Insert
-  ////////////////////////////////////////////////////////////////
-
-  printf("************************************\n");
-  printf("Creating first record.\n");
-
-  rec=wg_create_record(db, 3);
-  if (rec==NULL) {
-    printf("rec creation error.\n");
-    return;
+  ///////////////////////////////////////////
+  log("CREATE SAME:");
+  if(map.update(key,val)){
+    log("created ["<<key<<"]->["<<val<<"]");
   }
+  log("");
 
-  /* Encode a field, checking for errors */
-  enc = wg_encode_int(db, 44);
-  if(enc==WG_ILLEGAL) {
-    printf("failed to encode an integer.\n");
-    return;
+  ///////////////////////////////////////////
+  log("GET:");
+  std::string get_val;
+  if(map.get(key,get_val)){
+    log("get ["<<key<<"]->["<<get_val<<"]");
   }
+  log("");
 
-  /* Negative return value shows that an error occurred */
-  if(wg_set_field(db, rec, 0, enc) < 0) {
-    printf("failed to store a field.\n");
-    return;
-  }
-
-  /* Skip error checking for the sake of brevity for the rest of fields */
-  enc = wg_encode_int(db, -199999);
-  wg_set_field(db, rec, 1, enc);
-  wg_set_field(db, rec, 2, wg_encode_int(db, 0));
-
-  /* Now examine the record we have created. Get record length,
-   * encoded value of each field, data type and decoded value.
-   */
-
-  /* Negative return value shows an error. */
-  len = wg_get_record_len(db, rec);
-  if(len < 0) {
-    printf("failed to get record length.\n");
-    return;
-  }
-  printf("Size of created record at %p was: %d\n", rec, (int) len);
-
-  for(i=0; i<len; i++) {
-    printf("Reading field %d:", i);
-    enc = wg_get_field(db, rec, i);
-    if(wg_get_encoded_type(db, enc) != WG_INTTYPE) {
-      printf("data was of unexpected type.\n");
-      return;
+  ///////////////////////////////////////////
+  log("CREATE MANY:");
+  for(int i=0; i<10;++i){
+    std::string key = toString(i);
+    std::string val = key+key;
+    if(map.update(key,val)){
+      log("created ["<<key<<"]->["<<val<<"]");
     }
-    intdata = wg_decode_int(db, enc);
-    /* No error checking here. All integers are valid. */
-    printf(" %d\n", intdata);
   }
+  log("");
 
-  printf("************************************\n");
-  printf("\n");
-
-
-  ////////////////////////////////////////////////////////////////
-  // Query
-  ////////////////////////////////////////////////////////////////
-  printf("Query: search for field 0 == 44:\n");
-
-  void *query_rec = wg_find_record_int(db, 0, WG_COND_EQUAL, 44, NULL);
-  while(query_rec) {
-    printf("Found a record where field 0 is 44\n");
-    wg_print_record(db, (wg_int *) query_rec);
-    printf("\n");
-    query_rec = wg_find_record_int(db, 0, WG_COND_EQUAL, 44, query_rec);
+  ///////////////////////////////////////////
+  log("UPDATE MANY:");
+  for(int i=0; i<10;++i){
+    std::string key = toString(i);
+    std::string val = key+key+key;
+    if(map.update(key,val)){
+      log("update ["<<key<<"]->["<<val<<"]");
+    }
   }
+  log("");
 
-  printf("************************************\n");
-  printf("\n");
+  ///////////////////////////////////////////
+  log("DUMP:");
+  map.dump();
+  log("");
 
-  ////////////////////////////////////////////////////////////////
-  // Update
-  ////////////////////////////////////////////////////////////////
-
-  /* Fields can be erased by setting their value to 0 which always stands for NULL value. */
-  printf("Clearing field 1.\n");
-
-  wg_set_field(db, rec, 1, 0);
-
-  if(wg_get_field(db, rec, 1)==0) {
-    printf("Re-reading field 1 returned a 0 (NULL) field.\n");
-  } else {
-    printf("unexpected value \n");
-    return;
+  ///////////////////////////////////////////
+  log("REMOVE MANY:");
+  for(int i=5; i<10;++i){
+    std::string key = toString(i);
+    if(map.remove(key)){
+      log("remove ["<<key<<"]");
+    }
   }
+  log("");
 
-  /* Fields can be updated with data of any type (the type is not fixed). */
-  printf("Updating field 0 to a floating-point number.\n");
+  ///////////////////////////////////////////
+  log("DUMP:");
+  map.dump();
+  log("");
 
-  enc = wg_encode_double(db, 56.9988);
-  wg_set_field(db, rec, 0, enc);
+  ///////////////////////////////////////////
+  log("CHECK SIZE:");
+  log("db size: "<<map.size());
+  log("db free size: "<<map.freeSize());
+  log("");
 
-  enc = wg_get_field(db, rec, 0);
-  if(wg_get_encoded_type(db, enc) == WG_DOUBLETYPE) {
-    printf("Re-reading field 0 returned %f.\n", wg_decode_double(db, enc));
-  } else {
-    printf("data was of unexpected type.\n");
-    return;
+  if(map.deleteDB()){
+    log("db deleted successfully");
   }
-
-  printf("************************************\n");
-  printf("\n");
-
-
-  ////////////////////////////////////////////////////////////////
-  // Create and Insert A Next Record
-  ////////////////////////////////////////////////////////////////
-
-  /* Create a next record. Let's assume we're in an environment where
-   * the database is used concurrently, so there's a need to use locking.
-   */
-
-  printf("Creating second record.\n");
-
-  /* Lock id of 0 means that the operation failed */
-  lock_id = wg_start_write(db);
-  if(!lock_id) {
-    printf("failed to acquire lock.\n");
-    return;
-  }
-
-  /* Do the write operation we acquired the lock for. */
-  rec=wg_create_record(db, 6);
-
-  /* Failing to release the lock would be fatal to database operation. */
-  if(!wg_end_write(db, lock_id)) {
-    printf("failed to release lock.\n");
-    return;
-  }
-
-  if (!rec) {
-    printf("rec creation error.\n");
-    return;
-  }
-
-  /* Reading also requires locking./ */
-  lock_id = wg_start_read(db);
-  if(!lock_id) {
-    printf("failed to acquire lock.\n");
-    return;
-  }
-
-  /* Do our read operation... */
-  len = wg_get_record_len(db, rec);
-
-  /* ... and unlock immediately */
-  if(!wg_end_read(db, lock_id)) {
-    printf("failed to release lock.\n");
-    return;
-  }
-
-  if(len < 0) {
-    printf("failed to get record length.\n");
-    return;
-  }
-  printf("Size of created record at %p was: %d\n", rec, (int) len);
-
-  /* Let's find the first record in the database */
-  lock_id = wg_start_read(db);
-  firstrec = wg_get_first_record(db);
-  wg_end_read(db, lock_id);
-  if(!firstrec) {
-    printf("Failed to find first record.\n");
-    return;
-  }
-
-  printf("First record of database had address %p.\n", firstrec);
-
-  /* Let's check what the next record is to demonstrate scanning records. */
-  nextrec = firstrec;
-  lock_id = wg_start_read(db);
-  do {
-    nextrec = wg_get_next_record(db, nextrec);
-    if(nextrec)
-      printf("Next record had address %p.\n", nextrec);
-  } while(nextrec);
-  printf("Finished scanning database records.\n");
-  wg_end_read(db, lock_id);
-
-  printf("************************************\n");
-  printf("\n");
-
-  /* Set fields to various values. Field 0 is not touched at all (un-
-   * initialized). Field 1 is set to point to another record.
-   */
-
-  printf("Populating second record with data.\n");
-
-  /* Let's use the first record we found to demonstrate storing
-   * a link to a record in a field inside another record. */
-  lock_id = wg_start_write(db);
-  enc = wg_encode_record(db, firstrec);
-  wg_set_field(db, rec, 1, enc);
-  wg_end_write(db, lock_id);
-
-  /* Now set other fields to various data types. To keep the example shorter,
-   * the locking and unlocking operations are omitted (in real applications,
-   * this would be incorrect usage if concurrent access is expected).
-   */
-
-  wg_set_field(db, rec, 2, wg_encode_str(db, "This is a char array", NULL));
-  wg_set_field(db, rec, 3, wg_encode_char(db, 'a'));
-
-  /* For time and date, we use current time in local timezone */
-  enc = wg_encode_date(db, wg_current_localdate(db));
-  if(enc==WG_ILLEGAL) {
-    printf("failed to encode date.\n");
-    return;
-  }
-  wg_set_field(db, rec, 4, enc);
-
-  enc = wg_encode_time(db, wg_current_localtime(db));
-  if(enc==WG_ILLEGAL) {
-    printf("failed to encode time.\n");
-    return;
-  }
-  wg_set_field(db, rec, 5, enc);
-
-  /* Now read and print all the fields. */
-
-  wg_print_record(db, (wg_int *) rec);
-  printf("\n");
-
-  /* Date and time can be handled together as a datetime object. */
-  datedata = wg_decode_date(db, wg_get_field(db, rec, 4));
-  timedata = wg_decode_time(db, wg_get_field(db, rec, 5));
-  wg_strf_iso_datetime(db, datedata, timedata, strbuf);
-  printf("Reading datetime: %s.\n", strbuf);
-
-  printf("Setting date and time to 2010-03-31, 12:59\n");
-
-  /* Update date and time to arbitrary values using wg_strp_iso_date/time */
-  wg_set_field(db, rec, 4,
-    wg_encode_date(db, wg_strp_iso_date(db, "2010-03-31")));
-  wg_set_field(db, rec, 5,
-    wg_encode_time(db, wg_strp_iso_time(db, "12:59:00.33")));
-
-
-  printf("************************************\n");
-  printf("\n");
-
-  ////////////////////////////////////////////////////////////////
-  // Dump
-  ////////////////////////////////////////////////////////////////
-
-  printf("Dumping the contents of the database:\n");
-  wg_print_db(db);
-  printf("************************************\n");
-  printf("\n");
-
-  ////////////////////////////////////////////////////////////////
-  // Query
-  ////////////////////////////////////////////////////////////////
-  printf("Query: search for field 0 == 56.998800:\n");
-  double val = 56.998800;
-  rec = wg_find_record_double(db, 0, WG_COND_EQUAL, val, NULL);
-  while(rec) {
-    printf("Found a record where field 0 is 56.998800\n");
-    wg_print_record(db, (wg_int *) rec);
-    printf("\n");
-    rec = wg_find_record_double(db, 0, WG_COND_EQUAL, val, rec);
-  }
-
-  printf("\n");
-
-  printf("Query: search for field 2 == This is a char array:\n");
-  //NOTE: the api takes "char *" only, string.c_str will be const char *, so we pass &str_val[0]
-  std::string str_val = "This is a char array";
-  rec = wg_find_record_str(db, 2, WG_COND_EQUAL, &str_val[0], NULL);
-  while(rec) {
-    printf("Found a record where field 2 is This is a char array\n");
-    wg_print_record(db, (wg_int *) rec);
-    printf("\n");
-    rec = wg_find_record_str(db, 2, WG_COND_EQUAL, &str_val[0], rec);
-  }
-
-  printf("************************************\n");
-  printf("\n");
-
-  //TODO: update existing?
-
-  printf("********* Demo ended ************\n");
 }
-
-#ifdef __cplusplus
-}
-#endif
