@@ -4,6 +4,11 @@
 #include <iostream>
 #include <sstream>
 
+#include <vector>
+#include <fstream>
+#include <boost/algorithm/string.hpp>
+
+
 /* Include dbapi.h for WhiteDB API functions */
 #include "dbapi.h"
 
@@ -15,6 +20,7 @@ const int VAL_FIELD = 1;
 
 //TODO: process/thread safe
 //TODO: write our own wg_print_record so that to save result in a string
+//TODO: write two field together
 class WhiteDbKeyValueMap {
 private:
   std::string m_db_name;
@@ -65,7 +71,14 @@ public:
     //If the size parameter is > 0, the named shared memory segment exists and
     //it is smaller than the given size, the call returns NULL.
     //use wg_attach_existing_database() for existing db
-    m_db_ptr = wg_attach_database(&m_db_name[0], db_size);
+    m_db_ptr = wg_attach_existing_database(&m_db_name[0]);
+    if(m_db_ptr!=NULL){
+      log("Attaching to existing database ["<<m_db_name<<"], size ["<<size()<<"], free size ["<<freeSize()<<"]");
+    } else {
+      m_db_ptr = wg_attach_database(&m_db_name[0], db_size);
+      log("Creating new database ["<<m_db_name<<"], size ["<<size()<<"], free size ["<<freeSize()<<"]");
+    }
+
     checkValid();
   }
 
@@ -99,6 +112,9 @@ public:
     if(!checkValid()) return false;
 
     //Check if already exists
+    //This would be super slow for large scale of data
+    //So you have to be sure the record is not in DB, otherwise there will be duplications
+    /*
     void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
     if(existing_rec) {
       log("Key ["<<key<<"] already in DB:");
@@ -106,6 +122,7 @@ public:
       log("");
       return false;
     }
+    */
 
     void *rec = wg_create_record(m_db_ptr, 2);
     if (rec==NULL) {
@@ -117,17 +134,6 @@ public:
   }
 
   bool update(std::string key, std::string val){
-    if(!checkValid()) return false;
-
-    void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
-    if(existing_rec) {
-      setString(existing_rec,VAL_FIELD,val);
-      return true;
-    }
-    return false;
-  }
-
-  bool insert(std::string key, std::string val){
     if(!checkValid()) return false;
 
     //Try update first
@@ -160,7 +166,15 @@ public:
 
   void dump() const {
     log("Dumping ["<<m_db_name<<"]:");
-    wg_print_db(m_db_ptr);
+    //wg_print_db(m_db_ptr);
+  }
+
+  int size() const {
+    return wg_database_size(m_db_ptr);
+  }
+
+  int freeSize() const {
+    return wg_database_freesize(m_db_ptr);
   }
 
   bool deleteDB(){
@@ -178,19 +192,19 @@ std::string toString ( T num ){
 }
 
 int main(int argc, char **argv) {
-  WhiteDbKeyValueMap map("mizhang_whitedb",2000000);
+  WhiteDbKeyValueMap map("mizhang_whitedb",800000000);
 
   ///////////////////////////////////////////
   std::string key("isin"), val("123456678");
   log("CREATE:");
-  if(map.insert(key,val)){
+  if(map.update(key,val)){
     log("created ["<<key<<"]->["<<val<<"]");
   }
   log("");
 
   ///////////////////////////////////////////
   log("CREATE SAME:");
-  if(map.insert(key,val)){
+  if(map.update(key,val)){
     log("created ["<<key<<"]->["<<val<<"]");
   }
   log("");
@@ -208,7 +222,7 @@ int main(int argc, char **argv) {
   for(int i=0; i<10;++i){
     std::string key = toString(i);
     std::string val = key+key;
-    if(map.insert(key,val)){
+    if(map.update(key,val)){
       log("created ["<<key<<"]->["<<val<<"]");
     }
   }
@@ -219,7 +233,7 @@ int main(int argc, char **argv) {
   for(int i=0; i<10;++i){
     std::string key = toString(i);
     std::string val = key+key+key;
-    if(map.insert(key,val)){
+    if(map.update(key,val)){
       log("update ["<<key<<"]->["<<val<<"]");
     }
   }
@@ -243,6 +257,36 @@ int main(int argc, char **argv) {
   ///////////////////////////////////////////
   log("DUMP:");
   map.dump();
+  log("");
+
+  ///////////////////////////////////////////
+  log("LOAD SYMBOLOGY:");
+  std::string symbology_file_name = "/home/quotes/web/ticker_plants/dev/dbag/dbag_scoach_symbology-current.dat";
+  std::ifstream infile;
+  std::string line;
+  infile.open(symbology_file_name.c_str());
+
+  int count = 0;
+  while (std::getline(infile, line)){
+    std::vector<std::string> strs;
+    boost::split(strs, line, boost::is_any_of(" "));
+    if(strs.size()!=2){
+      log("Unknown line ["<<line<<"]");
+      continue;
+    }
+    map.create(strs[0],strs[1]);
+    count++;
+    if(count%100000==0){
+      log("loaded ["<<count<<"]");
+    }
+  }
+  infile.close();
+  log("");
+
+  ///////////////////////////////////////////
+  log("CHECK SIZE:");
+  log("db size: "<<map.size());
+  log("db free size: "<<map.freeSize());
   log("");
 
   if(map.deleteDB()){
