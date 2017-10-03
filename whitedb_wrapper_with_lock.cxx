@@ -25,10 +25,19 @@ namespace white_db_wrapper {
     wg_int m_lock_id;
   public:
     WriteLock(void * db_ptr):m_db_ptr(db_ptr){
-      m_lock_id = wg_start_write(m_db_ptr);
+      m_lock_id = 0;
+      while(!m_lock_id){
+        m_lock_id = wg_start_write(m_db_ptr);
+      }
+    }
+
+    bool success(){
       if(!m_lock_id) {
         log("ERROR: failed to get write lock");
+        return false;
       }
+
+      return true;
     }
 
     ~WriteLock(){
@@ -42,11 +51,21 @@ namespace white_db_wrapper {
     wg_int m_lock_id;
   public:
     ReadLock(void * db_ptr):m_db_ptr(db_ptr){
-      m_lock_id = wg_start_read(m_db_ptr);
-      if(!m_lock_id) {
-        log("ERROR: failed to get read lock");
+      m_lock_id = 0;
+      while(!m_lock_id){
+        m_lock_id = wg_start_read(m_db_ptr);
       }
     }
+
+    bool success(){
+      if(!m_lock_id) {
+        log("ERROR: failed to get read lock");
+        return false;
+      }
+
+      return true;
+    }
+
 
     ~ReadLock(){
       wg_end_read(m_db_ptr, m_lock_id);
@@ -71,6 +90,7 @@ namespace white_db_wrapper {
 
     bool setString(void *rec, int field, std::string & key, bool new_field=false) {
       WriteLock lock(m_db_ptr);
+
       wg_int enc = wg_encode_str(m_db_ptr, &key[0], NULL);
       if(enc==WG_ILLEGAL) {
         log("failed to encode ["<<key<<"]");
@@ -122,8 +142,8 @@ namespace white_db_wrapper {
 
     bool get(std::string key, std::string & val) const {
       if(!checkValid()) return false;
-
       ReadLock lock(m_db_ptr);
+
       void * existing_rec = wg_find_record_str(m_db_ptr, KEY_FIELD, WG_COND_EQUAL, &key[0], NULL);
       if(existing_rec) {
         wg_int enc = wg_get_field(m_db_ptr, existing_rec, VAL_FIELD);
@@ -219,8 +239,8 @@ namespace white_db_wrapper {
 
     void dump() const {
       log("Dumping ["<<m_db_name<<"]:");
-      ReadLock lock(m_db_ptr);//TODO: protential issue in delay?
-      wg_print_db(m_db_ptr);
+      //ReadLock lock(m_db_ptr);//NOTE: protential issue in delay, better not lock
+      //wg_print_db(m_db_ptr);
     }
 
     int size() const {
@@ -277,7 +297,7 @@ int main(int argc, char **argv) {
 
   ///////////////////////////////////////////
   log("CREATE MANY:");
-  for(int i=0; i<10;++i){
+  for(int i=0; i<10000;++i){
     std::string key = toString(i);
     std::string val = key+key;
     if(map.update(key,val)){
@@ -288,7 +308,7 @@ int main(int argc, char **argv) {
 
   ///////////////////////////////////////////
   log("UPDATE MANY:");
-  for(int i=0; i<10;++i){
+  for(int i=0; i<10000;++i){
     std::string key = toString(i);
     std::string val = key+key+key;
     if(map.update(key,val)){
@@ -318,12 +338,41 @@ int main(int argc, char **argv) {
   log("");
 
   ///////////////////////////////////////////
+  /*
+  log("LOAD SYMBOLOGY:");
+  std::string symbology_file_name = "/home/quotes/web/ticker_plants/dev/dbag/dbag_scoach_symbology-current.dat";
+  std::ifstream infile;
+  std::string line;
+  infile.open(symbology_file_name.c_str());
+
+  int count = 0;
+  while (std::getline(infile, line)){
+    std::vector<std::string> strs;
+    boost::split(strs, line, boost::is_any_of(" "));
+    if(strs.size()!=2){
+      log("Unknown line ["<<line<<"]");
+      continue;
+    }
+    map.create(strs[0],strs[1]);
+    count++;
+    if(count%100000==0){
+      log("loaded ["<<count<<"]");
+    }
+  }
+  infile.close();
+  log("");
+  */
+
+  ///////////////////////////////////////////
   log("CHECK SIZE:");
-  log("db size: "<<map.size());
-  log("db free size: "<<map.freeSize());
+  size_t size = map.size();
+  size_t free_size = map.freeSize();
+  log("db size: "<<size);
+  log("db free size: "<<free_size);
+  log("db free percentage:"<<double(free_size)/double(size)*100.0<<"%");
   log("");
 
-  if(map.deleteDB()){
-    log("db deleted successfully");
-  }
+  //if(map.deleteDB()){
+  //  log("db deleted successfully");
+  //}
 }
