@@ -1,2 +1,2 @@
-# PlayWithWhiteDB
-using WhiteDB: http://whitedb.org/index.html
+# C++ WhiteDB Wrapper
+WhiteDB: http://whitedb.org/index.html
